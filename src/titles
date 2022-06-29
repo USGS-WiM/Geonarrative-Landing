@@ -1,0 +1,167 @@
+#!/bin/perl
+# ======================================================================
+#  Extract titles from index.html files in subdirectories
+# ======================================================================
+# written by: david boldt                                   May 18, 2022
+# --------------------------------------------------------------------
+# global settings and variables
+
+use strict;
+use warnings;
+use File::Slurp;
+use Getopt::Long;
+use Pod::Usage;
+use Parallel::ForkManager;    # http://search.cpan.org/~dlux/Parallel-ForkManager-0.7.5/ForkManager.pm
+
+# run this many file reading and parsing tasks in parallel
+my $workers = 15;
+
+# parse command-line args
+my $man  = 0;
+my $help = 0;
+
+GetOptions( 'help|?' => \$help, man => \$man ) or pod2usage(2);
+pod2usage(1)                              if $help;
+pod2usage( -exitval => 0, -verbose => 2 ) if $man;
+
+# obtain index.html file pathnames in subdirectories
+# return array
+sub index_files {
+    opendir( my $dh, '.' ) or die "Unable to read current working directory\n$!\n";
+    return grep { -f and $_ ne './index.html' } map { "$_/index.html" } readdir $dh;
+}
+
+# extract information for label, link and description from  an HTML file
+# return string
+sub get_html_docinfo {
+    ( my $html_doc ) = @_;
+
+    # read file content
+    my $html = read_file($html_doc);
+
+    # get label for content from title if we can, h1 if not
+    ( my $title ) = $html =~ /<title>([^<]+)<\/title>/i;
+    if ( not $title ) {
+        ( my $title ) = $html =~ /<h1>([^<]+)<\/h1>/i;
+    }
+    return '' unless $title;    # skip the file if we haven't found title or h1 text
+
+    # extract directory name
+    ( my $directory = $html_doc ) =~ s%/.*%%;
+
+    # get content description from META tag element
+    ( my $description ) = $html =~ /<meta\s+name="description"\s+content="([^"]+)"/i;
+    $description = ( defined $description ? $description : '' );    # if undefined set to blank
+
+    # asemble what we've got
+    my $text;
+    $text  = "      <dt><a href=\"${directory}/\">${title}</a></dt>\n";
+    $text .= "      <dd>${description}</dd>\n\n";
+
+    return $text;
+}
+
+# execute multiple instances of a function in parallel
+# can return a list or hash of results (hash in this case)
+#
+#   Usage: run_in_parallel(\&function, \@list, 12);
+#   arguments: function name, array or hash-of-arrays ref, number of tasks to run in parallel
+sub run_in_parallel {
+    ( my $function, my $list_ref, my $simultaneous ) = @_;
+
+    my %assoc_array;
+    $simultaneous = 9 unless $simultaneous;    # default number of parallel operations
+
+    # execute tasks in parallel
+    my $pm = Parallel::ForkManager->new($simultaneous);
+
+    # data structure for storing results in memory
+    $pm->run_on_finish(
+        sub {
+            my ( $pid, $exit_code, $ident, $exit_signal, $core_dump, $data_structure_reference ) = @_;
+            my $key = $data_structure_reference->{input};
+            $assoc_array{$key} = $data_structure_reference->{result};
+        }
+    );
+
+    # iterate over list
+    if ( Scalar::Util::reftype $list_ref eq 'ARRAY' ) {
+      LOOP_a:
+        foreach my $item ( @{$list_ref} ) {
+            my $pid    = $pm->start and next LOOP_a;
+            my $result = $function->($item);
+
+            # store result in memory structure
+            $pm->finish( 0, { result => $result, input => $item } );
+        }
+        $pm->wait_all_children;
+    }
+
+    # iterate over hash of arrays
+    elsif ( Scalar::Util::reftype $list_ref eq 'HASH' ) {
+      LOOP_b:
+        foreach my $item ( keys %{$list_ref} ) {
+            my $pid    = $pm->start and next LOOP_b;
+            my $result = $function->( @{ $list_ref->{$item} } );
+
+            # store result in memory structure
+            $pm->finish( 0, { result => $result, input => $item } );
+        }
+        $pm->wait_all_children;
+    }
+
+    return %assoc_array;
+}
+
+# --------------------------------------------------------------------
+# main program
+
+# a list of index.html path names
+my @doc_list = index_files();
+
+# read and parse files in parallel, spawn multiple subprocess workers
+my %metadata = run_in_parallel( \&get_html_docinfo, \@doc_list, $workers );
+
+# list results
+foreach my $html_doc ( sort keys %metadata ) {
+    print $metadata{$html_doc} if $metadata{$html_doc};
+}
+
+__END__
+
+=head1 NAME
+
+title - extract TITLE and META description text from */index.html files
+
+=head1 SYNOPSIS
+
+title [--help|--man]
+
+=head1 OPTIONS
+
+=over
+
+=item --help
+
+help: print usage information
+
+=item --man
+
+man: full man page documentation
+
+=back
+
+=head1 DESCRIPTION
+
+Find all of the index.html files which are in subdirectories of the current
+directory and search each of them for text enclosed by <title>...</title>
+elements. If this search is empty obtain text between first <h1>...<h1>
+elements. Use this text as DT element content.
+
+Extract META "description" text to use as text for DD element.
+
+Multiple file reading and text extraction tasks are run in parallel.
+
+This program is meant to be executed via a SSI for generating an index page.
+
+=cut

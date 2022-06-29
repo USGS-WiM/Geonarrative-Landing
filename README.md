@@ -19,6 +19,9 @@ Another easy method is using the [Live Server extension for VS Code](https://mar
 
 Upload the source files directly to natweb.
 
+The `titles` file goes to `/afs/usgs/www/geonarrative/bin`
+The `index.html` and any other project files (if added) go to `/afs/usgs/www/geonarrative/htdocs`
+
 
 ## Built With
 
@@ -26,7 +29,6 @@ This where you list the main dependencies/software packages used. Include a link
 
 * HTML
 * CSS
-* Javascript
 
 ## Contributing
 
